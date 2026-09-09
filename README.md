@@ -4,6 +4,9 @@ QGISMCP connects [QGIS](https://qgis.org/) to [Claude AI](https://claude.ai/chat
 
 This project is strongly based on the [BlenderMCP](https://github.com/ahujasid/blender-mcp/tree/main) project by [Siddharth Ahuja](https://x.com/sidahuj)
 
+> **This is a fork:** [`dalingo81/qgis_mcp`](https://github.com/dalingo81/qgis_mcp), forked from [`jjsantos01/qgis_mcp`](https://github.com/jjsantos01/qgis_mcp).
+> It keeps the upstream design and adds bug fixes plus quality-of-life improvements — see [Fork modifications](#fork-modifications) for the full list.
+
 ## Features
 
 - **Two-way communication**: Connect Claude AI to QGIS through a socket-based server.
@@ -136,3 +139,30 @@ You have access to the tools to work with QGIS. You will do the following:
 	8. Render the map to "C:/Users/USER/GitHub/qgis_mcp/data/cdmx.png"
 	9. Save the project.
 ```
+
+## Fork modifications
+
+Changes in this fork relative to upstream `jjsantos01/qgis_mcp`, verified on QGIS 3.44.12 "Solothurn" with Python 3.12. All 15 MCP tools were exercised end-to-end; the five bugs below were reproduced, fixed, and re-verified through the MCP channel.
+
+### Bug fixes
+
+| # | Problem | Fix |
+|---|---------|-----|
+| 1 | `get_project_info` hardcoded a 10-layer limit, silently truncating larger projects (a 23-layer project reported 10) | Returns every layer |
+| 2 | `get_layers` / `get_project_info` called `findLayer(...).isVisible()` without a null check — crashed when a layer exists in the project but not in the layer tree | Null-safe; such layers report `visible: false` |
+| 3 | `create_new_project` only called `clear()` when `project.fileName()` was set, so layers leaked into the "new" project | Always clears before creating |
+| 4 | `execute_processing` stringified output layers (`"<QgsVectorLayer: 'output' (memory)>"`) — the result was unusable and the layer never entered the project | Returns structured `{id, name, type, feature_count}` and adds the layer to the project |
+| 5 | `render_map` used `QgsProject.mapLayers().values()`, ignoring layer-tree visibility and draw order — hidden layers were still rendered | Walks the layer tree, renders only visible layers in tree order |
+
+Layer types are also reported as `vector (Point)` / `vector (Line)` / `vector (Polygon)` / `raster` instead of opaque enum values (`vector_0`, `vector_1`, ...).
+
+### Improvements
+
+- **Auto-start the socket server** — the plugin starts it in `initGui()`, so QGIS listens on port 9876 as soon as it opens. No need to click "Start Server".
+- **Closing the panel no longer stops the server** — the dock widget hides; only "Stop Server" stops it.
+- **Explicit IPv4 connection** — the MCP server connects to `127.0.0.1` instead of `localhost`. On machines where `localhost` resolves to IPv6 `::1` first while the plugin listens on IPv4 only, `localhost` fails with an unhelpful *"Could not connect to Qgis"*.
+- **Fixed the heartbeat check** — it referenced a non-existent attribute, and `sendall(b'')` always succeeds on TCP, so a dead peer was never detected.
+
+### Note on the license
+
+Upstream ships **no LICENSE file**, and this fork inherits that state. Check with the upstream author before redistributing or shipping this in a product.
