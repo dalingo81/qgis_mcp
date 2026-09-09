@@ -17,6 +17,7 @@
 - [架构](#架构)
 - [本 fork 的修改](#本-fork-的修改)
 - [安装](#安装)
+- [WorkBuddy 一键安装](#workbuddy-一键安装)
 - [15 个工具](#15-个工具)
 - [使用示例](#使用示例)
 - [已知限制与坑](#已知限制与坑)
@@ -160,17 +161,67 @@ uv pip install -e .
 
 #### WorkBuddy
 
-编辑 `~/.workbuddy/mcp.json`，加入上面的 `qgis` 条目，然后：
-
-1. 到「连接器管理」页面对新出现的 `qgis` 服务器点**信任**
-2. **重启 WorkBuddy** —— 工具列表在会话启动时固化，不重启不会加载新服务器
-
-判断是否真的连上，看两条：进程里有没有 `qgis_mcp_server.py` 的命令行、模型侧能否搜到 `mcp__qgis__*` 工具。（WorkBuddy 的连接器状态列表只显示内置/市场连接器，自定义 MCP 不在其中，别拿它当判据。）
+编辑 `~/.workbuddy/mcp.json`，加入上面的 `qgis` 条目。嫌手动配麻烦，直接看下一章的 [一键安装提示词](#workbuddy-一键安装)。
 
 ### 4. 启动并验证
 
 1. 打开 QGIS —— 插件会自动拉起服务（右下角无报错即成功）
 2. 在客户端里调用 `ping`，返回 `{"pong": true}` 即链路通
+
+---
+
+## WorkBuddy 一键安装
+
+如果你是 [WorkBuddy](https://www.workbuddy.cn/) 用户，上面 4 步可以全部交给 AI 做：把下面这段提示词整段复制进对话框即可（`<安装目录>` 留着也行，WorkBuddy 会自己挑位置并告诉你；想指定就提前替换成绝对路径）。
+
+```plain
+帮我在这台机器上安装并跑通 qgis-mcp（QGIS 的 MCP 服务器），装完我要能在对话里直接操作 QGIS。
+
+仓库用这个 fork：https://github.com/dalingo81/qgis_mcp
+（上游 jjsantos01/qgis_mcp 已停更 11 个月，这个 fork 修了 5 个 bug，并在 QGIS 3.44.12 LTR 上把 15 个工具全量实测过。）
+
+按顺序执行，每步做完用一行汇报结果；失败了说清原因再问我的意见，不要静默跳过，也不要自作主张换方案：
+
+0. 先确认本机已安装 QGIS（Windows 通常在 C:\Program Files\QGIS 3.44.12，其他系统用 which/qgis 找）。
+   没装就停下来告诉我，等我装好再继续。
+
+1. 克隆仓库到 <安装目录>/qgis_mcp，克隆前先告诉我你打算放在哪。
+
+2. 建虚拟环境并装依赖：
+   cd <安装目录>/qgis_mcp
+   uv venv
+   uv pip install -e .
+   uv 不在 PATH 的话，Windows 一般在 %USERPROFILE%\.local\bin\uv.exe，用绝对路径调用。
+
+3. 把仓库里的 qgis_mcp_plugin 整个文件夹，复制到 QGIS 当前 profile 的插件目录：
+   - Windows: %APPDATA%\QGIS\QGIS3\profiles\default\python\plugins
+   - macOS: ~/Library/Application Support/QGIS/QGIS3/profiles/default/python/plugins
+   复制完提醒我重启 QGIS，并在「插件 → 管理和安装插件」里启用 "QGIS MCP"。
+
+4. 在 ~/.workbuddy/mcp.json 的 mcpServers 里加一条 qgis，不要动其他已有条目：
+   {
+     "qgis": {
+       "command": "<安装目录>/qgis_mcp/.venv/Scripts/python.exe",
+       "args": ["<安装目录>/qgis_mcp/src/qgis_mcp/qgis_mcp_server.py"]
+     }
+   }
+   注意：必须是绝对路径；用 venv 里的解释器直跑，别用 "uv run" —— Windows 上 uv 常常不在 MCP 客户端的 PATH 里。
+   macOS/Linux 把 .venv/Scripts/python.exe 换成 .venv/bin/python。
+
+5. 做完后告诉我两件事：
+   - 去「连接器管理」页面给新出现的 qgis 服务器点「信任」
+   - 重启 WorkBuddy，不重启工具列表不会加载新服务器
+
+6. 我重启 WorkBuddy 并打开 QGIS 后，调用 qgis 的 ping 工具验证，返回 {"pong": true} 就算装好了。
+   如果报 "Could not connect to Qgis"，按这个顺序排查：QGIS 是否真的开着 → 插件是否已启用
+   → 9876 端口是否被占用 → server 端是不是连的 127.0.0.1（localhost 在部分机器上会先解析到
+   IPv6 ::1，而插件只监听 IPv4，会报这句含义模糊的错误）。
+```
+
+> **两个容易踩的点**
+>
+> 1. **必须重启 WorkBuddy**：工具列表在会话启动时固化，信任了不重启照样看不到 `mcp__qgis__*` 工具。
+> 2. **别拿连接器状态页判断成败**：那里只列内置/市场连接器，自定义 MCP 不在其中。可靠判据是两条 —— 进程里有没有 `qgis_mcp_server.py` 的命令行、模型侧能否搜到 `mcp__qgis__*` 工具。
 
 ---
 
