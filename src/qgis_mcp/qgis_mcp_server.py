@@ -14,8 +14,12 @@ logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("QgisMCPServer")
 
+# 插件端 socket 只监听 IPv4 回环，这里必须显式用 127.0.0.1 而不是 localhost
+QGIS_HOST = '127.0.0.1'
+QGIS_PORT = 9876
+
 class QgisMCPServer:
-    def __init__(self, host='localhost', port=9876):
+    def __init__(self, host='127.0.0.1', port=9876):
         self.host = host
         self.port = port
         self.socket = None
@@ -85,7 +89,7 @@ def get_qgis_connection():
         # Test if the connection is still alive with a simple ping
         try:
             # Just try to send a small message to check if the socket is still connected
-            _qgis_connection.sock.sendall(b'')
+            _qgis_connection.socket.sendall(b'')
             return _qgis_connection
         except Exception as e:
             # Connection is dead, close it and create a new one
@@ -98,7 +102,9 @@ def get_qgis_connection():
     
     # Create a new connection if needed
     if _qgis_connection is None:
-        _qgis_connection = QgisMCPServer(host="localhost", port=9876)
+        # 显式用 127.0.0.1：本机 localhost 优先解析成 IPv6 ::1，
+        # 而 QGIS 插件只监听 IPv4，用 'localhost' 会连不上
+        _qgis_connection = QgisMCPServer(host=QGIS_HOST, port=9876)
         if not _qgis_connection.connect():
             logger.error("Failed to connect to Qgis")
             _qgis_connection = None

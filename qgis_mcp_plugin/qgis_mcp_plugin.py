@@ -13,7 +13,7 @@ from qgis.utils import active_plugins
 
 class QgisMCPServer(QObject):
     """Server class to handle socket connections and execute QGIS commands"""
-    
+
     def __init__(self, host='localhost', port=9876, iface=None):
         super().__init__()
         self.host = host
@@ -24,52 +24,52 @@ class QgisMCPServer(QObject):
         self.client = None
         self.buffer = b''
         self.timer = None
-    
+
     def start(self):
         """Start the server"""
         self.running = True
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        
+
         try:
             self.socket.bind((self.host, self.port))
             self.socket.listen(1)
             self.socket.setblocking(False)
-            
+
             # Create a timer to process server operations
             self.timer = QTimer()
             self.timer.timeout.connect(self.process_server)
             self.timer.start(100)  # 100ms interval
-            
+
             QgsMessageLog.logMessage(f"QGIS MCP server started on {self.host}:{self.port}", "QGIS MCP")
             return True
         except Exception as e:
             QgsMessageLog.logMessage(f"Failed to start server: {str(e)}", "QGIS MCP", Qgis.Critical)
             self.stop()
             return False
-            
+
     def stop(self):
         """Stop the server"""
         self.running = False
-        
+
         if self.timer:
             self.timer.stop()
             self.timer = None
-            
+
         if self.socket:
             self.socket.close()
         if self.client:
             self.client.close()
-            
+
         self.socket = None
         self.client = None
         QgsMessageLog.logMessage("QGIS MCP server stopped", "QGIS MCP")
-    
+
     def process_server(self):
         """Process server operations (called by timer)"""
         if not self.running:
             return
-            
+
         try:
             # Accept new connections
             if not self.client and self.socket:
@@ -81,7 +81,7 @@ class QgisMCPServer(QObject):
                     pass  # No connection waiting
                 except Exception as e:
                     QgsMessageLog.logMessage(f"Error accepting connection: {str(e)}", "QGIS MCP", Qgis.Warning)
-                
+
             # Process existing connection
             if self.client:
                 try:
@@ -115,14 +115,14 @@ class QgisMCPServer(QObject):
                         self.client.close()
                         self.client = None
                         self.buffer = b''
-                        
+
                 except Exception as e:
                     QgsMessageLog.logMessage(f"Error with client: {str(e)}", "QGIS MCP", Qgis.Warning)
                     if self.client:
                         self.client.close()
                         self.client = None
                     self.buffer = b''
-                    
+
         except Exception as e:
             QgsMessageLog.logMessage(f"Server error: {str(e)}", "QGIS MCP", Qgis.Critical)
 
@@ -131,7 +131,7 @@ class QgisMCPServer(QObject):
         try:
             cmd_type = command.get("type")
             params = command.get("params", {})
-            
+
             handlers = {
                 "ping": self.ping,
                 "get_qgis_info": self.get_qgis_info,
@@ -149,7 +149,7 @@ class QgisMCPServer(QObject):
                 "render_map": self.render_map,
                 "create_new_project": self.create_new_project,
             }
-            
+
             handler = handlers.get(cmd_type)
             if handler:
                 try:
@@ -163,17 +163,17 @@ class QgisMCPServer(QObject):
                     return {"status": "error", "message": str(e)}
             else:
                 return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
-                
+
         except Exception as e:
             QgsMessageLog.logMessage(f"Error executing command: {str(e)}", "QGIS MCP", Qgis.Critical)
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
-    
+
     # Command handlers
     def ping(self, **kwargs):
         """Simple ping command"""
         return {"pong": True}
-    
+
     def get_qgis_info(self, **kwargs):
         """Get basic QGIS information"""
         return {
@@ -181,11 +181,11 @@ class QgisMCPServer(QObject):
             "profile_folder": QgsApplication.qgisSettingsDirPath(),
             "plugins_count": len(active_plugins)
         }
-    
+
     def get_project_info(self, **kwargs):
         """Get information about the current QGIS project"""
         project = QgsProject.instance()
-        
+
         # Get basic project information
         info = {
             "filename": project.fileName(),
@@ -194,48 +194,52 @@ class QgisMCPServer(QObject):
             "crs": project.crs().authid(),
             "layers": []
         }
-        
-        # Add basic layer information (limit to 10 layers for performance)
-        layers = list(project.mapLayers().values())
-        for i, layer in enumerate(layers):
-            if i >= 10:  # Limit to 10 layers
-                break
-                
+
+        # Include all layers so callers can see the full picture.
+        # (Previous version capped at 10 layers, which silently hid the rest.)
+        for layer in project.mapLayers().values():
             layer_info = {
                 "id": layer.id(),
                 "name": layer.name(),
                 "type": self._get_layer_type(layer),
-                "visible": layer.isValid() and project.layerTreeRoot().findLayer(layer.id()).isVisible()
+                "visible": layer.isValid() and self._is_layer_visible(layer.id())
             }
             info["layers"].append(layer_info)
-        
+
         return info
-    
+
     def _get_layer_type(self, layer):
-        """Helper to get layer type as string"""
+        """Helper to get layer type as a human-readable string"""
         if layer.type() == QgsMapLayer.VectorLayer:
-            return f"vector_{layer.geometryType()}"
+            geom = {0: "Point", 1: "Line", 2: "Polygon"}.get(layer.geometryType(), "Unknown")
+            return f"vector ({geom})"
         elif layer.type() == QgsMapLayer.RasterLayer:
             return "raster"
         else:
             return str(layer.type())
-    
+
+    def _is_layer_visible(self, layer_id):
+        """Return layer tree visibility, safe for layers that are in the
+        project but not in the layer tree (those default to hidden)."""
+        node = QgsProject.instance().layerTreeRoot().findLayer(layer_id)
+        return node.isVisible() if node else False
+
     def execute_code(self, code, **kwargs):
         """Execute arbitrary PyQGIS code"""
 
         # Capture stdout and stderr
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
-        
+
         # Store original stdout and stderr
         original_stdout = sys.stdout
         original_stderr = sys.stderr
-        
+
         try:
             # Redirect stdout and stderr
             sys.stdout = stdout_capture
             sys.stderr = stderr_capture
-            
+
             # Create a local namespace for execution
             namespace = {
                 "qgis": Qgis,
@@ -246,14 +250,14 @@ class QgisMCPServer(QObject):
                 "QgsRasterLayer": QgsRasterLayer,
                 "QgsCoordinateReferenceSystem": QgsCoordinateReferenceSystem
             }
-            
+
             # Execute the code
             exec(code, namespace)
-            
+
             # Restore stdout and stderr
             sys.stdout = original_stdout
             sys.stderr = original_stderr
-            
+
             return {
                 "executed": True,
                 "stdout": stdout_capture.getvalue(),
@@ -262,11 +266,11 @@ class QgisMCPServer(QObject):
         except Exception as e:
             # Generate full traceback
             error_traceback = traceback.format_exc()
-            
+
             # Restore stdout and stderr in case of exception
             sys.stdout = original_stdout
             sys.stderr = original_stderr
-            
+
             return {
                 "executed": False,
                 "error": str(e),
@@ -274,42 +278,42 @@ class QgisMCPServer(QObject):
                 "stdout": stdout_capture.getvalue(),
                 "stderr": stderr_capture.getvalue()
             }
-    
+
     def add_vector_layer(self, path, name=None, provider="ogr", **kwargs):
         """Add a vector layer to the project"""
         if not name:
             name = os.path.basename(path)
-            
+
         # Create the layer
         layer = QgsVectorLayer(path, name, provider)
-        
+
         if not layer.isValid():
             raise Exception(f"Layer is not valid: {path}")
-        
+
         # Add to project
         QgsProject.instance().addMapLayer(layer)
-        
+
         return {
             "id": layer.id(),
             "name": layer.name(),
             "type": self._get_layer_type(layer),
             "feature_count": layer.featureCount()
         }
-    
+
     def add_raster_layer(self, path, name=None, provider="gdal", **kwargs):
         """Add a raster layer to the project"""
         if not name:
             name = os.path.basename(path)
-            
+
         # Create the layer
         layer = QgsRasterLayer(path, name, provider)
-        
+
         if not layer.isValid():
             raise Exception(f"Layer is not valid: {path}")
-        
+
         # Add to project
         QgsProject.instance().addMapLayer(layer)
-        
+
         return {
             "id": layer.id(),
             "name": layer.name(),
@@ -317,20 +321,20 @@ class QgisMCPServer(QObject):
             "width": layer.width(),
             "height": layer.height()
         }
-    
+
     def get_layers(self, **kwargs):
         """Get all layers in the project"""
         project = QgsProject.instance()
         layers = []
-        
+
         for layer_id, layer in project.mapLayers().items():
             layer_info = {
                 "id": layer_id,
                 "name": layer.name(),
                 "type": self._get_layer_type(layer),
-                "visible": project.layerTreeRoot().findLayer(layer_id).isVisible()
+                "visible": self._is_layer_visible(layer_id)
             }
-            
+
             # Add type-specific information
             if layer.type() == QgsMapLayer.VectorLayer:
                 layer_info.update({
@@ -342,25 +346,25 @@ class QgisMCPServer(QObject):
                     "width": layer.width(),
                     "height": layer.height()
                 })
-                
+
             layers.append(layer_info)
-        
+
         return layers
-    
+
     def remove_layer(self, layer_id, **kwargs):
         """Remove a layer from the project"""
         project = QgsProject.instance()
-        
+
         if layer_id in project.mapLayers():
             project.removeMapLayer(layer_id)
             return {"removed": layer_id}
         else:
             raise Exception(f"Layer not found: {layer_id}")
-    
+
     def zoom_to_layer(self, layer_id, **kwargs):
         """Zoom to a layer's extent"""
         project = QgsProject.instance()
-        
+
         if layer_id in project.mapLayers():
             layer = project.mapLayer(layer_id)
             self.iface.setActiveLayer(layer)
@@ -368,27 +372,27 @@ class QgisMCPServer(QObject):
             return {"zoomed_to": layer_id}
         else:
             raise Exception(f"Layer not found: {layer_id}")
-    
+
     def get_layer_features(self, layer_id, limit=10, **kwargs):
         """Get features from a vector layer"""
         project = QgsProject.instance()
-        
+
         if layer_id in project.mapLayers():
             layer = project.mapLayer(layer_id)
-            
+
             if layer.type() != QgsMapLayer.VectorLayer:
                 raise Exception(f"Layer is not a vector layer: {layer_id}")
-            
+
             features = []
             for i, feature in enumerate(layer.getFeatures()):
                 if i >= limit:
                     break
-                    
+
                 # Extract attributes
                 attrs = {}
                 for field in layer.fields():
                     attrs[field.name()] = feature.attribute(field.name())
-                
+
                 # Extract geometry if available
                 geom = None
                 if feature.hasGeometry():
@@ -396,13 +400,13 @@ class QgisMCPServer(QObject):
                         "type": feature.geometry().type(),
                         "wkt": feature.geometry().asWkt(precision=4)
                     }
-                
+
                 features.append({
                     "id": feature.id(),
                     "attributes": attrs,
                     "geometry": geom
                 })
-            
+
             return {
                 "layer_id": layer_id,
                 "feature_count": layer.featureCount(),
@@ -411,36 +415,58 @@ class QgisMCPServer(QObject):
             }
         else:
             raise Exception(f"Layer not found: {layer_id}")
-    
+
     def execute_processing(self, algorithm, parameters, **kwargs):
-        """Execute a processing algorithm"""
+        """Execute a processing algorithm. Memory-layer outputs are automatically
+        added to the project and reported with id/name/feature_count so the
+        caller can use them; other outputs are stringified as before."""
         try:
             import processing
             result = processing.run(algorithm, parameters)
-            return {
-                "algorithm": algorithm,
-                "result": {k: str(v) for k, v in result.items()}  # Convert values to strings for JSON
-            }
+            out = {}
+            for k, v in result.items():
+                if isinstance(v, QgsMapLayer):
+                    # Memory outputs from processing are not auto-added to
+                    # the project; do it here so the caller can use them.
+                    if v.id() not in QgsProject.instance().mapLayers():
+                        try:
+                            QgsProject.instance().addMapLayer(v)
+                        except Exception:
+                            pass
+                    layer_info = {
+                        "id": v.id(),
+                        "name": v.name(),
+                        "type": self._get_layer_type(v)
+                    }
+                    if v.type() == QgsMapLayer.VectorLayer:
+                        layer_info["feature_count"] = v.featureCount()
+                    elif v.type() == QgsMapLayer.RasterLayer:
+                        layer_info["width"] = v.width()
+                        layer_info["height"] = v.height()
+                    out[k] = layer_info
+                else:
+                    out[k] = str(v)
+            return {"algorithm": algorithm, "result": out}
         except Exception as e:
             raise Exception(f"Processing error: {str(e)}")
-    
+
     def save_project(self, path=None, **kwargs):
         """Save the current project"""
         project = QgsProject.instance()
-        
+
         if not path and not project.fileName():
             raise Exception("No project path specified and no current project path")
-        
+
         save_path = path if path else project.fileName()
         if project.write(save_path):
             return {"saved": save_path}
         else:
             raise Exception(f"Failed to save project to {save_path}")
-    
+
     def load_project(self, path, **kwargs):
         """Load a project"""
         project = QgsProject.instance()
-        
+
         if project.read(path):
             self.iface.mapCanvas().refresh()
             return {
@@ -449,23 +475,18 @@ class QgisMCPServer(QObject):
             }
         else:
             raise Exception(f"Failed to load project from {path}")
-    
+
     def create_new_project(self, path, **kwargs):
         """
         Creates a new QGIS project and saves it at the specified path.
-        If a project is already loaded, it clears it before creating the new one.
-        
-        :param project_path: Full path where the project will be saved
-                            (e.g., 'C:/path/to/project.qgz')
+        The current project (if any) is always cleared first, regardless of
+        whether it has been saved before.
         """
         project = QgsProject.instance()
-        
-        if project.fileName():
-            project.clear()
-        
+        project.clear()  # always clear, not only when a filename is set
         project.setFileName(path)
         self.iface.mapCanvas().refresh()
-        
+
         # Save the project
         if project.write():
             return {
@@ -474,31 +495,48 @@ class QgisMCPServer(QObject):
             }
         else:
             raise Exception(f"Failed to save project to {path}")
-    
+
     def render_map(self, path, width=800, height=600, **kwargs):
-        """Render the current map view to an image"""
+        """Render the current map view to an image. Only layers visible in
+        the layer tree are drawn, in tree order (bottom-up), so the output
+        matches what the user sees in the canvas."""
         try:
             # Create map settings
             ms = QgsMapSettings()
-            
-            # Set layers to render
-            layers = list(QgsProject.instance().mapLayers().values())
-            ms.setLayers(layers)
-            
+
+            # Walk the layer tree and collect visible layers in tree order.
+            # Using mapLayers().values() directly ignored the layer tree
+            # visibility checkboxes and produced an arbitrary draw order,
+            # so the rendered image did not match the canvas.
+            visible_layers = []
+            root = QgsProject.instance().layerTreeRoot()
+
+            def _walk(node):
+                if isinstance(node, QgsLayerTreeGroup):
+                    if node.isVisible():
+                        for child in node.children():
+                            _walk(child)
+                elif isinstance(node, QgsLayerTreeLayer):
+                    if node.isVisible():
+                        visible_layers.append(node.layer())
+            _walk(root)
+
+            ms.setLayers(visible_layers)
+
             # Set map canvas properties
             rect = self.iface.mapCanvas().extent()
             ms.setExtent(rect)
             ms.setOutputSize(QSize(width, height))
             ms.setBackgroundColor(QColor(255, 255, 255))
             ms.setOutputDpi(96)
-            
+
             # Create the render
             render = QgsMapRendererParallelJob(ms)
-            
+
             # Start rendering
             render.start()
             render.waitForFinished()
-            
+
             # Get the image and save
             img = render.renderedImage()
             if img.save(path):
@@ -510,7 +548,7 @@ class QgisMCPServer(QObject):
                 }
             else:
                 raise Exception(f"Failed to save rendered image to {path}")
-                
+
         except Exception as e:
             raise Exception(f"Render error: {str(e)}")
 
@@ -518,20 +556,20 @@ class QgisMCPServer(QObject):
 class QgisMCPDockWidget(QDockWidget):
     """Dock widget for the QGIS MCP plugin"""
     closed = pyqtSignal()
-    
+
     def __init__(self, iface):
         super().__init__("QGIS MCP")
         self.iface = iface
         self.server = None
         self.setup_ui()
-    
+
     def setup_ui(self):
         """Set up the dock widget UI"""
         # Create widget and layout
         widget = QWidget()
         layout = QVBoxLayout()
         widget.setLayout(layout)
-        
+
         # Add port selection
         layout.addWidget(QLabel("Server Port:"))
         self.port_spin = QSpinBox()
@@ -539,62 +577,62 @@ class QgisMCPDockWidget(QDockWidget):
         self.port_spin.setMaximum(65535)
         self.port_spin.setValue(9876)
         layout.addWidget(self.port_spin)
-        
+
         # Add server control buttons
         self.start_button = QPushButton("Start Server")
         self.start_button.clicked.connect(self.start_server)
         layout.addWidget(self.start_button)
-        
+
         self.stop_button = QPushButton("Stop Server")
         self.stop_button.clicked.connect(self.stop_server)
         self.stop_button.setEnabled(False)
         layout.addWidget(self.stop_button)
-        
+
         # Add status label
         self.status_label = QLabel("Server: Stopped")
         layout.addWidget(self.status_label)
-        
+
         # Add to dock widget
         self.setWidget(widget)
-    
+
     def start_server(self):
         """Start the server"""
         if not self.server:
             port = self.port_spin.value()
             self.server = QgisMCPServer(port=port, iface=self.iface)
-            
+
         if self.server.start():
             self.status_label.setText(f"Server: Running on port {self.server.port}")
             self.start_button.setEnabled(False)
             self.stop_button.setEnabled(True)
             self.port_spin.setEnabled(False)
-    
+
     def stop_server(self):
         """Stop the server"""
         if self.server:
             self.server.stop()
             self.server = None
-            
+
         self.status_label.setText("Server: Stopped")
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.port_spin.setEnabled(True)
-        
+
     def closeEvent(self, event):
-        """Stop server on dock close"""
-        self.stop_server()
+        """Closing the panel only hides it; the server keeps running.
+        Use the Stop Server button to actually stop it."""
         self.closed.emit()
         super().closeEvent(event)
 
 
 class QgisMCPPlugin:
     """Main plugin class for QGIS MCP"""
-    
+
     def __init__(self, iface):
         self.iface = iface
         self.dock_widget = None
         self.action = None
-    
+
     def initGui(self):
         """Initialize GUI"""
         # Create action
@@ -604,32 +642,52 @@ class QgisMCPPlugin:
         )
         self.action.setCheckable(True)
         self.action.triggered.connect(self.toggle_dock)
-        
+
         # Add to plugins menu and toolbar
         self.iface.addPluginToMenu("QGIS MCP", self.action)
         self.iface.addToolBarIcon(self.action)
-    
+
+        # Auto start the socket server so no manual "Start Server" click is needed
+        self.auto_start_server()
+
+    def auto_start_server(self, port=9876):
+        """Start the MCP socket server automatically on plugin load"""
+        try:
+            if not self.dock_widget:
+                self.dock_widget = QgisMCPDockWidget(self.iface)
+            if self.dock_widget.server:
+                return True
+            self.dock_widget.port_spin.setValue(port)
+            self.dock_widget.start_server()
+            QgsMessageLog.logMessage(
+                f"MCP server auto-started on port {port}", "QGIS MCP"
+            )
+            return True
+        except Exception as e:
+            QgsMessageLog.logMessage(
+                f"MCP server auto-start failed: {str(e)}", "QGIS MCP", Qgis.Critical
+            )
+            return False
+
     def toggle_dock(self, checked):
         """Toggle the dock widget"""
         if checked:
             # Create dock widget if it doesn't exist
             if not self.dock_widget:
                 self.dock_widget = QgisMCPDockWidget(self.iface)
+            # Make sure it is attached to the main window before showing
+            if not self.dock_widget.isVisible():
                 self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
-                # Connect close event
-                self.dock_widget.closed.connect(self.dock_closed)
-            else:
-                # Show existing dock widget
-                self.dock_widget.show()
+            self.dock_widget.show()
         else:
             # Hide dock widget
             if self.dock_widget:
                 self.dock_widget.hide()
-    
+
     def dock_closed(self):
         """Handle dock widget closed"""
         self.action.setChecked(False)
-    
+
     def unload(self):
         """Unload plugin"""
         # Stop server if running
@@ -637,7 +695,7 @@ class QgisMCPPlugin:
             self.dock_widget.stop_server()
             self.iface.removeDockWidget(self.dock_widget)
             self.dock_widget = None
-            
+
         # Remove plugin menu item and toolbar icon
         self.iface.removePluginMenu("QGIS MCP", self.action)
         self.iface.removeToolBarIcon(self.action)
